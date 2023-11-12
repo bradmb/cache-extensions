@@ -5,7 +5,7 @@ VisualStudioVersion = 17.7.34202.233
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TakeThree.CachingHelpers", "CachingHelpers\TakeThree.CachingHelpers.csproj", "{E0DD32B3-BD24-4D08-B83A-2D580BADA70C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TakeThree.CachingHelpers.Tests", "TakeThree.CachingHelpers.Tests\TakeThree.CachingHelpers.Tests.csproj", "{8018E467-DA0A-44A8-9479-842E0A715B3B}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TakeThree.CachingHelpers.Tests", "Tests\TakeThree.CachingHelpers.Tests.csproj", "{8018E467-DA0A-44A8-9479-842E0A715B3B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
