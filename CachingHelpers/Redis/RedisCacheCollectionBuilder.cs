@@ -23,12 +23,12 @@ public class RedisCacheCollectionBuilder<T> where T : class
     private string? _collectionKey;
     private TimeSpan? _expiration;
 
-    private string? _identifier;
-    private PropertyInfo? _identifierProperty;
     private T? _item;
-
-    private Func<T, string>? _identifierSelector;
     private Func<Task<IEnumerable<T>?>>? _fallbackAsyncFunction;
+
+    internal PropertyInfo? IdentifierProperty;
+    internal string? Identifier;
+    internal Func<T, string>? IdentifierSelector;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RedisCacheCollectionBuilder{T}"/> class.
@@ -47,7 +47,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// </summary>
     /// <param name="key">The key.</param>
     /// <returns>The Redis cache collection builder.</returns>
-    public RedisCacheCollectionBuilder<T> WithCollectionKey(string key)
+    public virtual RedisCacheCollectionBuilder<T> WithCollectionKey(string key)
     {
         _collectionKey = key;
         return this;
@@ -58,7 +58,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// </summary>
     /// <param name="fallbackAsyncFunction">The fallback async function.</param>
     /// <returns>The Redis cache collection builder.</returns>
-    public RedisCacheCollectionBuilder<T> WithFallback(Func<Task<IEnumerable<T>?>> fallbackAsyncFunction)
+    public virtual RedisCacheCollectionBuilder<T> WithFallback(Func<Task<IEnumerable<T>?>> fallbackAsyncFunction)
     {
         _fallbackAsyncFunction = fallbackAsyncFunction;
         return this;
@@ -69,69 +69,9 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// </summary>
     /// <param name="expiration">The expiration.</param>
     /// <returns>The Redis cache collection builder.</returns>
-    public RedisCacheCollectionBuilder<T> WithExpiration(TimeSpan expiration)
+    public virtual RedisCacheCollectionBuilder<T> WithExpiration(TimeSpan expiration)
     {
         _expiration = expiration;
-        return this;
-    }
-
-    /// <summary>
-    /// Sets the identifier that will be used to perform create/update/delete operations on an item.
-    /// </summary>
-    /// <param name="propertyName">The property name.</param>
-    /// <returns>The Redis cache collection builder.</returns>
-    public RedisCacheCollectionBuilder<T> WithPropertyRecordIdentifier(string propertyName)
-    {
-        _identifierProperty = typeof(T).GetProperty(propertyName);
-        if (_identifierProperty == null)
-        {
-            throw new ArgumentException($"Property '{propertyName}' not found on type '{typeof(T).Name}'.");
-        }
-
-        return this;
-    }
-
-    /// <summary>
-    /// Sets the identifier that will be used to perform create/update/delete operations on an item.
-    /// </summary>
-    /// <param name="identifierSelector">The identifier selector.</param>
-    /// <returns>The Redis cache collection builder.</returns>
-    public RedisCacheCollectionBuilder<T> WithRecordIdentifier(Func<T, string> identifierSelector)
-    {
-        _identifierSelector = identifierSelector;
-        return this;
-    }
-
-    /// <summary>
-    /// Sets the identifier that will be used to perform create/update/delete operations on an item.
-    /// </summary>
-    /// <param name="identifier">The identifier.</param>
-    /// <returns>The Redis cache collection builder.</returns>
-    public RedisCacheCollectionBuilder<T> WithRecordIdentifier(string identifier)
-    {
-        _identifier = identifier;
-        return this;
-    }
-
-    /// <summary>
-    /// Sets the identifier that will be used to perform create/update/delete operations on an item.
-    /// </summary>
-    /// <param name="identifier">The identifier.</param>
-    /// <returns>The Redis cache collection builder.</returns>
-    public RedisCacheCollectionBuilder<T> WithRecordIdentifier(int identifier)
-    {
-        _identifier = identifier.ToString();
-        return this;
-    }
-
-    /// <summary>
-    /// Sets the identifier that will be used to perform create/update/delete operations on an item.
-    /// </summary>
-    /// <param name="identifier">The identifier.</param>
-    /// <returns>The Redis cache collection builder.</returns>
-    public RedisCacheCollectionBuilder<T> WithRecordIdentifier(Guid identifier)
-    {
-        _identifier = identifier.ToString("N");
         return this;
     }
 
@@ -140,7 +80,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// </summary>
     /// <param name="item">The item.</param>
     /// <returns>The Redis cache collection builder.</returns>
-    public RedisCacheCollectionBuilder<T> WithItem(T item)
+    public virtual RedisCacheCollectionBuilder<T> WithItem(T item)
     {
         _item = item;
         return this;
@@ -449,17 +389,17 @@ public class RedisCacheCollectionBuilder<T> where T : class
 
         // If more than one of the three identifier options are set, fail and let the user know to only use one.
         var identifierCount = 0;
-        if (_identifierSelector != null)
+        if (IdentifierSelector != null)
         {
             identifierCount++;
         }
 
-        if (_identifierProperty is not null)
+        if (IdentifierProperty is not null)
         {
             identifierCount++;
         }
 
-        if (_identifier is not null)
+        if (Identifier is not null)
         {
             identifierCount++;
         }
@@ -470,19 +410,19 @@ public class RedisCacheCollectionBuilder<T> where T : class
         }
 
         // Get the ID from either _identifierSelector or _identifierProperty
-        if (_identifierSelector != null)
+        if (IdentifierSelector != null)
         {
-            return _identifierSelector(item);
+            return IdentifierSelector(item);
         }
 
-        if (_identifierProperty is not null)
+        if (IdentifierProperty is not null)
         {
-            return _identifierProperty.GetValue(item)?.ToString();
+            return IdentifierProperty.GetValue(item)?.ToString();
         }
 
-        if (_identifier is not null)
+        if (Identifier is not null)
         {
-            return _identifier;
+            return Identifier;
         }
 
         return Result.Fail("Identifier not set. Please use WithIdentifier to set a value.");

@@ -36,9 +36,9 @@ public class RedisCacheBuilder
     /// </summary>
     /// <typeparam name="TItemType">The type of item in the collection.</typeparam>
     /// <returns>A RedisCacheCollectionBuilder instance for adding to the collection.</returns>
-    public RedisCacheCollectionBuilder<TItemType> AddToCollection<TItemType>() where TItemType : class
+    public RedisCacheCollectionModifier<TItemType> AddToCollection<TItemType>() where TItemType : class
     {
-        return new RedisCacheCollectionBuilder<TItemType>(_redisDb, OperationType.Add);
+        return new RedisCacheCollectionModifier<TItemType>(_redisDb, OperationType.Add);
     }
 
     /// <summary>
@@ -46,9 +46,9 @@ public class RedisCacheBuilder
     /// </summary>
     /// <typeparam name="TItemType">The type of item in the collection.</typeparam>
     /// <returns>A RedisCacheCollectionBuilder instance for updating the collection.</returns>
-    public RedisCacheCollectionBuilder<TItemType> UpdateCollection<TItemType>() where TItemType : class
+    public RedisCacheCollectionModifier<TItemType> UpdateCollection<TItemType>() where TItemType : class
     {
-        return new RedisCacheCollectionBuilder<TItemType>(_redisDb, OperationType.Update);
+        return new RedisCacheCollectionModifier<TItemType>(_redisDb, OperationType.Update);
     }
 
     /// <summary>
@@ -56,8 +56,8 @@ public class RedisCacheBuilder
     /// </summary>
     /// <typeparam name="TItemType">The type of item in the collection.</typeparam>
     /// <returns>A RedisCacheCollectionBuilder instance for deleting from the collection.</returns>
-    public RedisCacheCollectionBuilder<TItemType> DeleteFromCollection<TItemType>() where TItemType : class
+    public RedisCacheCollectionModifier<TItemType> DeleteFromCollection<TItemType>() where TItemType : class
     {
-        return new RedisCacheCollectionBuilder<TItemType>(_redisDb, OperationType.Delete);
+        return new RedisCacheCollectionModifier<TItemType>(_redisDb, OperationType.Delete);
     }
 }

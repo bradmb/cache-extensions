@@ -54,7 +54,6 @@ public class RedisCacheExtensionTests
             .FromCache()
             .ReadFromCollection<string>()
             .WithCollectionKey(CollectionKey)
-            .WithRecordIdentifier(RecordIdentifier)
             .ExecuteAsync();
 
         Assert.IsTrue(verifyResult.IsSuccess);
