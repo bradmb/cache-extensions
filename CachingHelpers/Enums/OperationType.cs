@@ -1,14 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+﻿namespace TakeThree.CachingHelpers.Enums;
 
-namespace TakeThree.CachingHelpers.Enums
+public enum OperationType
 {
-    public enum OperationType
-    {
-        Read,
-        Add,
-        Update,
-        Delete
-    }
+    Read,
+    Add,
+    Update,
+    Delete
 }
