@@ -13,6 +13,17 @@ namespace TakeThree.CachingHelpers.Redis
         }
 
         /// <summary>
+        /// Sets the item that you will create, update, or delete.
+        /// </summary>
+        /// <param name="item">The item.</param>
+        /// <returns>The Redis cache collection builder.</returns>
+        public RedisCacheCollectionModifier<T> WithItem(T item)
+        {
+            Item = item;
+            return this;
+        }
+
+        /// <summary>
         /// Sets the identifier that will be used to perform create/update/delete operations on an item.
         /// </summary>
         /// <param name="propertyName">The property name.</param>
@@ -102,17 +113,6 @@ namespace TakeThree.CachingHelpers.Redis
         public new RedisCacheCollectionModifier<T> WithExpiration(TimeSpan expiration)
         {
             base.WithExpiration(expiration);
-            return this;
-        }
-
-        /// <summary>
-        /// Sets the item.
-        /// </summary>
-        /// <param name="item">The item.</param>
-        /// <returns>The Redis cache collection builder.</returns>
-        public new RedisCacheCollectionBuilder<T> WithItem(T item)
-        {
-            base.WithItem(item);
             return this;
         }
     }

@@ -23,9 +23,9 @@ public class RedisCacheCollectionBuilder<T> where T : class
     private string? _collectionKey;
     private TimeSpan? _expiration;
 
-    private T? _item;
     private Func<Task<IEnumerable<T>?>>? _fallbackAsyncFunction;
 
+    internal T? Item;
     internal PropertyInfo? IdentifierProperty;
     internal string? Identifier;
     internal Func<T, string>? IdentifierSelector;
@@ -72,17 +72,6 @@ public class RedisCacheCollectionBuilder<T> where T : class
     public virtual RedisCacheCollectionBuilder<T> WithExpiration(TimeSpan expiration)
     {
         _expiration = expiration;
-        return this;
-    }
-
-    /// <summary>
-    /// Sets the item.
-    /// </summary>
-    /// <param name="item">The item.</param>
-    /// <returns>The Redis cache collection builder.</returns>
-    public virtual RedisCacheCollectionBuilder<T> WithItem(T item)
-    {
-        _item = item;
         return this;
     }
 
@@ -161,7 +150,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// <returns>A <see cref="Result"/> containing the operation outcome.</returns>
     private async Task<Result> AddAsync()
     {
-        var idValueResult = GetItemIdentifier(_item);
+        var idValueResult = GetItemIdentifier(Item);
         if (!idValueResult.IsSuccess)
         {
             return Result.Fail(idValueResult.Errors);
@@ -171,7 +160,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
 
         try
         {
-            await _redisDb.StringSetAsync(itemKey, Serialize(_item));
+            await _redisDb.StringSetAsync(itemKey, Serialize(Item));
             await _redisDb.SetAddAsync(_collectionKey, idValueResult.Value);
         }
         catch (Exception ex)
@@ -189,7 +178,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// <returns>A <see cref="Result"/> containing the operation outcome.</returns>
     private async Task<Result> UpdateAsync()
     {
-        var idValueResult = GetItemIdentifier(_item);
+        var idValueResult = GetItemIdentifier(Item);
         if (!idValueResult.IsSuccess)
         {
             return Result.Fail(idValueResult.Errors);
@@ -228,7 +217,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
                 continue;
             }
 
-            var newValue = prop.GetValue(_item);
+            var newValue = prop.GetValue(Item);
             prop.SetValue(existingItem, newValue);
         }
 
@@ -251,7 +240,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// <returns>A <see cref="Result"/> containing the operation outcome.</returns>
     private async Task<Result> DeleteAsync()
     {
-        var idValueResult = GetItemIdentifier(_item);
+        var idValueResult = GetItemIdentifier(Item);
         if (!idValueResult.IsSuccess)
         {
             return Result.Fail(idValueResult.Errors);
