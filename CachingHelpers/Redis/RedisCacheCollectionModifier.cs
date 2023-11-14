@@ -8,7 +8,7 @@ namespace TakeThree.CachingHelpers.Redis
 {
     public class RedisCacheCollectionModifier<T> : RedisCacheCollectionBuilder<T> where T : class
     {
-        public RedisCacheCollectionModifier(IDatabase redisDb, OperationType operationType) : base(redisDb, operationType)
+        public RedisCacheCollectionModifier(IDatabase redisDb, OperationType operationType, RedisCacheCollectionOptions? options = null) : base(redisDb, operationType, options)
         {
         }
 
@@ -80,6 +80,17 @@ namespace TakeThree.CachingHelpers.Redis
         public RedisCacheCollectionModifier<T> WithRecordIdentifier(Guid identifier)
         {
             Identifier = identifier.ToString("N");
+            return this;
+        }
+
+        /// <summary>
+        /// Allows you to provide a function that determines the changes to make to the cached object.
+        /// </summary>
+        /// <param name="changesFunction">The changes function.</param>
+        /// <returns>The Redis cache collection builder.</returns>
+        public RedisCacheCollectionModifier<T> WithChanges(Action<T> changesFunction)
+        {
+            ChangesFunction = changesFunction;
             return this;
         }
 

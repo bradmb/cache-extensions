@@ -1,11 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using StackExchange.Redis;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentResults;
+using TakeThree.CachingHelpers.Attributes;
 using TakeThree.CachingHelpers.Enums;
 
 namespace TakeThree.CachingHelpers.Redis;
@@ -19,9 +21,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
 {
     private readonly IDatabase _redisDb;
     private readonly OperationType _operationType;
-
-    private string? _collectionKey;
-    private TimeSpan? _expiration;
+    private readonly RedisCacheCollectionOptions _options;
 
     private Func<Task<IEnumerable<T>?>>? _fallbackAsyncFunction;
 
@@ -29,17 +29,21 @@ public class RedisCacheCollectionBuilder<T> where T : class
     internal PropertyInfo? IdentifierProperty;
     internal string? Identifier;
     internal Func<T, string>? IdentifierSelector;
+    internal Action<T>? ChangesFunction;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RedisCacheCollectionBuilder{T}"/> class.
     /// </summary>
     /// <param name="redisDb">The Redis database.</param>
     /// <param name="operationType">The operation type.</param>
-    public RedisCacheCollectionBuilder(IDatabase redisDb, OperationType operationType)
+    /// <param name="options">The options you can set to default certain settings.</param>
+    public RedisCacheCollectionBuilder(IDatabase redisDb, OperationType operationType, RedisCacheCollectionOptions? options = null)
     {
         _redisDb = redisDb;
         _operationType = operationType;
-        _collectionKey = typeof(T).Name + ":Collection";
+
+        _options = options ?? new RedisCacheCollectionOptions();
+        _options.CollectionKey ??= "TakeThree:Caching:" + typeof(T).Name + ":Collection";
     }
 
     /// <summary>
@@ -49,7 +53,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// <returns>The Redis cache collection builder.</returns>
     public virtual RedisCacheCollectionBuilder<T> WithCollectionKey(string key)
     {
-        _collectionKey = key;
+        _options.CollectionKey = key;
         return this;
     }
 
@@ -71,7 +75,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// <returns>The Redis cache collection builder.</returns>
     public virtual RedisCacheCollectionBuilder<T> WithExpiration(TimeSpan expiration)
     {
-        _expiration = expiration;
+        _options.Expiration = expiration;
         return this;
     }
 
@@ -82,10 +86,13 @@ public class RedisCacheCollectionBuilder<T> where T : class
     public async Task<Result<IEnumerable<T>>> ExecuteAsync()
     {
         // First, check to see if the cache is initialized. If it is not, we need to initialize it.
-        var initializationResult = await InitializeCacheFromFallbackAsync();
-        if (initializationResult.IsFailed)
+        if (_operationType != OperationType.Replace)
         {
-            return Result.Fail(initializationResult.Errors);
+            var initializationResult = await InitializeCacheFromFallbackAsync();
+            if (initializationResult.IsFailed)
+            {
+                return Result.Fail(initializationResult.Errors);
+            }
         }
 
         return _operationType switch
@@ -94,6 +101,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
             OperationType.Add => await AddAsync(),
             OperationType.Update => await UpdateAsync(),
             OperationType.Delete => await DeleteAsync(),
+            OperationType.Replace => await ReplaceAsync(),
             _ => Result.Fail("Unexpected operation type"),
         };
     }
@@ -109,7 +117,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
 
         try
         {
-            itemIds = await _redisDb.SetMembersAsync(_collectionKey);
+            itemIds = await _redisDb.SetMembersAsync(_options.CollectionKey);
         }
         catch (Exception ex)
         {
@@ -122,7 +130,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
 
             try
             {
-                cachedData = await _redisDb.StringGetAsync(_collectionKey + ":" + id);
+                cachedData = await _redisDb.StringGetAsync(_options.CollectionKey + ":" + id);
             }
             catch (Exception ex)
             {
@@ -156,12 +164,12 @@ public class RedisCacheCollectionBuilder<T> where T : class
             return Result.Fail(idValueResult.Errors);
         }
 
-        var itemKey = _collectionKey + ":" + idValueResult.Value;
+        var itemKey = _options.CollectionKey + ":" + idValueResult.Value;
 
         try
         {
             await _redisDb.StringSetAsync(itemKey, Serialize(Item));
-            await _redisDb.SetAddAsync(_collectionKey, idValueResult.Value);
+            await _redisDb.SetAddAsync(_options.CollectionKey, idValueResult.Value);
         }
         catch (Exception ex)
         {
@@ -184,7 +192,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
             return Result.Fail(idValueResult.Errors);
         }
 
-        var itemKey = _collectionKey + ":" + idValueResult.Value;
+        var itemKey = _options.CollectionKey + ":" + idValueResult.Value;
 
         RedisValue existingData;
 
@@ -210,15 +218,26 @@ public class RedisCacheCollectionBuilder<T> where T : class
 
         var existingItem = existingItemResult.Value;
 
-        foreach (var prop in typeof(T).GetProperties())
+        if (ChangesFunction is not null)
         {
-            if (!prop.CanWrite)
+            ChangesFunction(existingItem);
+        }
+        else if (Item is not null)
+        {
+            foreach (var prop in typeof(T).GetProperties())
             {
-                continue;
-            }
+                if (!prop.CanWrite)
+                {
+                    continue;
+                }
 
-            var newValue = prop.GetValue(Item);
-            prop.SetValue(existingItem, newValue);
+                var newValue = prop.GetValue(Item);
+                prop.SetValue(existingItem, newValue);
+            }
+        }
+        else
+        {
+            return Result.Fail("No changes were made to the item. Please pass either WithItem or WithChanges to update a cached value.");
         }
 
         try
@@ -246,12 +265,12 @@ public class RedisCacheCollectionBuilder<T> where T : class
             return Result.Fail(idValueResult.Errors);
         }
 
-        var itemKey = _collectionKey + ":" + idValueResult.Value;
+        var itemKey = _options.CollectionKey + ":" + idValueResult.Value;
 
         try
         {
             await _redisDb.StringSetAsync(itemKey, RedisValue.Null);
-            await _redisDb.SetRemoveAsync(_collectionKey, idValueResult.Value);
+            await _redisDb.SetRemoveAsync(_options.CollectionKey, idValueResult.Value);
         }
         catch (Exception ex)
         {
@@ -260,6 +279,51 @@ public class RedisCacheCollectionBuilder<T> where T : class
 
         // Now let's set the expiration if the value was passed
         return await UpdateCollectionExpirationAsync();
+    }
+
+    /// <summary>
+    /// Replaces the entire collection asynchronously.
+    /// </summary>
+    /// <returns>A <see cref="Result"/> containing the operation outcome.</returns>
+    private async Task<Result> ReplaceAsync()
+    {
+        RedisValue[] itemIds;
+
+        // Get all of the keys of the items in the collection
+        try
+        {
+            itemIds = await _redisDb.SetMembersAsync(_options.CollectionKey);
+        }
+        catch (Exception ex)
+        {
+            return Result.Fail(new Error("Error when attempting to read the record").CausedBy(ex));
+        }
+
+        // Next delete all of the individual items
+        foreach (var id in itemIds)
+        {
+            try
+            {
+                await _redisDb.KeyDeleteAsync(_options.CollectionKey + ":" + id);
+            }
+            catch (Exception ex)
+            {
+                return Result.Fail(new Error("Error when attempting to replace the collection").CausedBy(ex));
+            }
+        }
+
+        // Now delete the set
+        try
+        {
+            await _redisDb.KeyDeleteAsync(_options.CollectionKey);
+        }
+        catch (Exception ex)
+        {
+            return Result.Fail(new Error("Error when attempting to replace the collection").CausedBy(ex));
+        }
+
+        // Now let's re-initialize the cache
+        return await InitializeCacheFromFallbackAsync();
     }
 
     /// <summary>
@@ -294,7 +358,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
         // it is, then we are going to skip initialization.
         try
         {
-            var itemIds = await _redisDb.SetMembersAsync(_collectionKey);
+            var itemIds = await _redisDb.SetMembersAsync(_options.CollectionKey);
             if (itemIds is { Length: > 0 })
             {
                 return Result.Ok();
@@ -310,10 +374,18 @@ public class RedisCacheCollectionBuilder<T> where T : class
             return Result.Fail("No fallback function set.");
         }
 
-        var fallbackResult = await _fallbackAsyncFunction();
-        if (fallbackResult is null)
+        IEnumerable<T>? fallbackResult;
+        try
         {
-            return Result.Fail("Fallback function returned null.");
+            fallbackResult = await _fallbackAsyncFunction();
+            if (fallbackResult is null)
+            {
+                return Result.Fail("Fallback function returned null.");
+            }
+        }
+        catch (Exception ex)
+        {
+            return Result.Fail(new Error("Error when attempting to read the record").CausedBy(ex));
         }
 
         foreach (var item in fallbackResult)
@@ -324,12 +396,12 @@ public class RedisCacheCollectionBuilder<T> where T : class
                 return Result.Fail(idValueResult.Errors);
             }
 
-            var itemKey = _collectionKey + ":" + idValueResult.Value;
+            var itemKey = _options.CollectionKey + ":" + idValueResult.Value;
 
             try
             {
                 _redisDb.StringSet(itemKey, Serialize(item));
-                _redisDb.SetAdd(_collectionKey, idValueResult.Value);
+                _redisDb.SetAdd(_options.CollectionKey, idValueResult.Value);
             }
             catch (Exception ex)
             {
@@ -347,14 +419,14 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// <returns>A <see cref="Result"/> indicating success or failure of the operation.</returns>
     private async Task<Result> UpdateCollectionExpirationAsync()
     {
-        if (_expiration is null)
+        if (_options.Expiration is null)
         {
             return Result.Ok();
         }
 
         try
         {
-            await _redisDb.KeyExpireAsync(_collectionKey, _expiration);
+            await _redisDb.KeyExpireAsync(_options.CollectionKey, _options.Expiration);
         }
         catch (Exception ex)
         {
@@ -371,11 +443,6 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// <returns>A <see cref="Result"/> containing the identifier or an error.</returns>
     private Result<string?> GetItemIdentifier(T? item)
     {
-        if (item is null)
-        {
-            return Result.Fail("Item not set. Please use WithItem to set a value.");
-        }
-
         // If more than one of the three identifier options are set, fail and let the user know to only use one.
         var identifierCount = 0;
         if (IdentifierSelector != null)
@@ -398,14 +465,23 @@ public class RedisCacheCollectionBuilder<T> where T : class
             return Result.Fail("More than one identifier option set. Please only use one.");
         }
 
-        // Get the ID from either _identifierSelector or _identifierProperty
         if (IdentifierSelector != null)
         {
+            if (item is null)
+            {
+                return Result.Fail("Item not set. Please use WithItem.");
+            }
+
             return IdentifierSelector(item);
         }
 
         if (IdentifierProperty is not null)
         {
+            if (item is null)
+            {
+                return Result.Fail("Item not set. Please use WithItem.");
+            }
+
             return IdentifierProperty.GetValue(item)?.ToString();
         }
 
@@ -414,6 +490,38 @@ public class RedisCacheCollectionBuilder<T> where T : class
             return Identifier;
         }
 
-        return Result.Fail("Identifier not set. Please use WithIdentifier to set a value.");
+        var attributeResult = GetItemIdentifierFromAttribute(item);
+        if (attributeResult.IsSuccess)
+        {
+            return attributeResult.Value;
+        }
+
+        return Result.Fail("Identifier not set. Please use WithRecordIdentifier to set a value or use the CacheRecordIdentifierAttribute on the class property.");
+    }
+
+    /// <summary>
+    /// Retrieves the identifier for the current item from the attribute.
+    /// </summary>
+    /// <param name="item">The item to identify.</param>
+    /// <returns>A <see cref="Result"/> containing the identifier or an error.</returns>
+    [SuppressMessage("Minor Code Smell", "S6602:\"Find\" method should be used instead of the \"FirstOrDefault\" extension", Justification = "Find is not available for the array")]
+    private Result<string?> GetItemIdentifierFromAttribute(T? item)
+    {
+        var identifierProperty = typeof(T)
+            .GetProperties()
+            .FirstOrDefault(prop => Attribute.IsDefined(prop, typeof(CacheRecordIdentifierAttribute)));
+
+        if (identifierProperty == null)
+        {
+            return Result.Fail("Attribute was not found");
+        }
+
+        var identifierValue = identifierProperty.GetValue(item)?.ToString();
+        if (string.IsNullOrEmpty(identifierValue))
+        {
+            return Result.Fail("Attribute was not found");
+        }
+
+        return identifierValue;
     }
 }

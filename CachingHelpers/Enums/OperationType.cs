@@ -5,5 +5,6 @@ public enum OperationType
     Read,
     Add,
     Update,
-    Delete
+    Delete,
+    Replace
 }

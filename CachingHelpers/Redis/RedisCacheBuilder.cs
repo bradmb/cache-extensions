@@ -1,5 +1,8 @@
-﻿using StackExchange.Redis;
+﻿using System;
+using System.Collections.Generic;
+using StackExchange.Redis;
 using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
 using TakeThree.CachingHelpers.Enums;
 
 namespace TakeThree.CachingHelpers.Redis;
@@ -8,17 +11,20 @@ namespace TakeThree.CachingHelpers.Redis;
 /// Redis cache builder class.
 /// </summary>
 [SuppressMessage("ReSharper", "UnusedMember.Global")]
-public class RedisCacheBuilder
+public class RedisCacheBuilder<TItemType> where TItemType : class
 {
     private readonly IDatabase _redisDb;
+    private readonly RedisCacheCollectionOptions? _options;
 
     /// <summary>
     /// Constructor for RedisCacheBuilder.
     /// </summary>
     /// <param name="redisDb">The Redis database.</param>
-    public RedisCacheBuilder(IDatabase redisDb)
+    /// <param name="options">The options you can set to default certain settings.</param>
+    public RedisCacheBuilder(IDatabase redisDb, RedisCacheCollectionOptions? options = null)
     {
         _redisDb = redisDb;
+        _options = options;
     }
 
     /// <summary>
@@ -26,9 +32,22 @@ public class RedisCacheBuilder
     /// </summary>
     /// <typeparam name="TItemType">The type of item in the collection.</typeparam>
     /// <returns>A RedisCacheCollectionBuilder instance for reading from the collection.</returns>
-    public RedisCacheCollectionBuilder<TItemType> ReadFromCollection<TItemType>() where TItemType : class
+    public RedisCacheCollectionBuilder<TItemType> ReadFromCollection()
     {
-        return new RedisCacheCollectionBuilder<TItemType>(_redisDb, OperationType.Read);
+        return new RedisCacheCollectionBuilder<TItemType>(_redisDb, OperationType.Read, _options);
+    }
+
+    /// <summary>
+    /// Method to replace a Redis cache collection.
+    /// </summary>
+    /// <typeparam name="TItemType">The type of item in the collection.</typeparam>
+    /// <returns>A RedisCacheCollectionBuilder instance for replacing the collection.</returns>
+    public RedisCacheCollectionModifier<TItemType> ReplaceCollection(Func<Task<IEnumerable<TItemType>?>> replaceFunction)
+    {
+        var collectionModifier = new RedisCacheCollectionModifier<TItemType>(_redisDb, OperationType.Replace, _options);
+        collectionModifier.WithFallback(replaceFunction);
+
+        return collectionModifier;
     }
 
     /// <summary>
@@ -36,9 +55,9 @@ public class RedisCacheBuilder
     /// </summary>
     /// <typeparam name="TItemType">The type of item in the collection.</typeparam>
     /// <returns>A RedisCacheCollectionBuilder instance for adding to the collection.</returns>
-    public RedisCacheCollectionModifier<TItemType> AddToCollection<TItemType>() where TItemType : class
+    public RedisCacheCollectionModifier<TItemType> AddToCollection()
     {
-        return new RedisCacheCollectionModifier<TItemType>(_redisDb, OperationType.Add);
+        return new RedisCacheCollectionModifier<TItemType>(_redisDb, OperationType.Add, _options);
     }
 
     /// <summary>
@@ -46,9 +65,9 @@ public class RedisCacheBuilder
     /// </summary>
     /// <typeparam name="TItemType">The type of item in the collection.</typeparam>
     /// <returns>A RedisCacheCollectionBuilder instance for updating the collection.</returns>
-    public RedisCacheCollectionModifier<TItemType> UpdateCollection<TItemType>() where TItemType : class
+    public RedisCacheCollectionModifier<TItemType> UpdateCollection()
     {
-        return new RedisCacheCollectionModifier<TItemType>(_redisDb, OperationType.Update);
+        return new RedisCacheCollectionModifier<TItemType>(_redisDb, OperationType.Update, _options);
     }
 
     /// <summary>
@@ -56,8 +75,8 @@ public class RedisCacheBuilder
     /// </summary>
     /// <typeparam name="TItemType">The type of item in the collection.</typeparam>
     /// <returns>A RedisCacheCollectionBuilder instance for deleting from the collection.</returns>
-    public RedisCacheCollectionModifier<TItemType> DeleteFromCollection<TItemType>() where TItemType : class
+    public RedisCacheCollectionModifier<TItemType> DeleteFromCollection()
     {
-        return new RedisCacheCollectionModifier<TItemType>(_redisDb, OperationType.Delete);
+        return new RedisCacheCollectionModifier<TItemType>(_redisDb, OperationType.Delete, _options);
     }
 }
