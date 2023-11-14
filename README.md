@@ -48,7 +48,7 @@ public class MyObjectType
 
 ```
 var myObjectResult = await myObjectCache.ReadFromCollection()
-    // pass in your method into WithFallBack to populate the cache when the cache is not initalized
+    // pass your method into WithFallBack to populate the cache when the cache is not initalized
     .WithFallback(_dapperDbFs.FlowSheetAdministration.GetFlowSheetCategoriesAsync)
     .ExecuteAsync();
 
