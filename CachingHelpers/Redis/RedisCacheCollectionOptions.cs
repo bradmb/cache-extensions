@@ -10,6 +10,11 @@ public class RedisCacheCollectionOptions
     public string? CollectionKey { get; set; }
 
     /// <summary>
+    /// The limit on batch size for query operations to the cache. If not set, defaults to 2500.
+    /// </summary>
+    public int BatchOperationThresholdLimit { get; set; } = 2500;
+
+    /// <summary>
     /// When the data should expire. If not set, the data will not expire.
     /// </summary>
     public TimeSpan? Expiration { get; set; }

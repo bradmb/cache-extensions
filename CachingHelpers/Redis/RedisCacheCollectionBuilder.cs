@@ -7,6 +7,8 @@ using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentResults;
+using Polly;
+using Polly.Retry;
 using TakeThree.CachingHelpers.Attributes;
 using TakeThree.CachingHelpers.Enums;
 
@@ -19,16 +21,54 @@ namespace TakeThree.CachingHelpers.Redis;
 [SuppressMessage("ReSharper", "UnusedMember.Global")]
 public class RedisCacheCollectionBuilder<T> where T : class
 {
+    /// <summary>
+    /// The redis database connection
+    /// </summary>
     private readonly IDatabase _redisDb;
+
+    /// <summary>
+    /// The type of operation to perform.
+    /// </summary>
     private readonly OperationType _operationType;
+
+    /// <summary>
+    /// The options you can set to default certain settings.
+    /// </summary>
     private readonly RedisCacheCollectionOptions _options;
 
     private Func<Task<IEnumerable<T>?>>? _fallbackAsyncFunction;
 
+    /// <summary>
+    /// The resilience pipeline to use for the operations (Polly).
+    /// </summary>
+    private readonly ResiliencePipeline _resiliencePipeline = new ResiliencePipelineBuilder()
+        .AddRetry(new RetryStrategyOptions())
+        .AddTimeout(TimeSpan.FromSeconds(10))
+        .Build();
+
+    /// <summary>
+    /// Add Operations: The item to add to the collection.
+    /// </summary>
     internal T? Item;
+
+    /// <summary>
+    /// Add/Update/Delete Operations: The identifier property to use to identify the item.
+    /// </summary>
     internal PropertyInfo? IdentifierProperty;
+
+    /// <summary>
+    /// Add/Update/Delete Operations: The identifier to use to identify the item.
+    /// </summary>
     internal string? Identifier;
+
+    /// <summary>
+    /// Add/Update/Delete Operations: The identifier selector function to use to identify the item.
+    /// </summary>
     internal Func<T, string>? IdentifierSelector;
+
+    /// <summary>
+    /// Update Operations: The changes to make to the item.
+    /// </summary>
     internal Action<T>? ChangesFunction;
 
     /// <summary>
@@ -121,32 +161,40 @@ public class RedisCacheCollectionBuilder<T> where T : class
         }
         catch (Exception ex)
         {
-            return Result.Fail(new Error("Error when attempting to read the record").CausedBy(ex));
+            return Result.Fail(new Error("Error when attempting to read the set members").CausedBy(ex));
         }
 
-        foreach (var id in itemIds)
-        {
-            RedisValue cachedData;
+        // We are going to loop through the items in batches to avoid
+        // a large amount of individual requests to Redis.
+        var remainingCount = itemIds.Length;
+        var completedCount = 0;
 
+        var redisCacheKeys = itemIds
+            .Select(itemId => new RedisKey($"{_options.CollectionKey}:{itemId}"))
+            .ToList();
+
+        while (remainingCount > 0)
+        {
+            var batch = redisCacheKeys.Skip(completedCount).Take(_options.BatchOperationThresholdLimit);
+
+            RedisValue[] cachedDataResult;
             try
             {
-                cachedData = await _redisDb.StringGetAsync(_options.CollectionKey + ":" + id);
+                cachedDataResult = await _resiliencePipeline.ExecuteAsync(async _ => await _redisDb.StringGetAsync(batch.ToArray()));
             }
             catch (Exception ex)
             {
-                return Result.Fail(new Error("Error when attempting to read the record").CausedBy(ex));
+                return Result.Fail(new Error("Error when attempting to read the records").CausedBy(ex));
             }
 
-            if (cachedData.IsNullOrEmpty)
-            {
-                continue;
-            }
-
-            var addResult = Result.Try(() => items.Add(Deserialize<T>(cachedData)));
+            var addResult = Result.Try(() => items.AddRange(cachedDataResult.Select(Deserialize<T>)));
             if (addResult.IsFailed)
             {
                 return addResult;
             }
+
+            remainingCount -= _options.BatchOperationThresholdLimit;
+            completedCount += _options.BatchOperationThresholdLimit;
         }
 
         return items;
