@@ -1,14 +1,16 @@
-﻿using System;
+﻿using FluentResults;
+using K4os.Compression.LZ4;
+using Polly;
+using Polly.Retry;
+using StackExchange.Redis;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
-using StackExchange.Redis;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
-using FluentResults;
-using Polly;
-using Polly.Retry;
 using TakeThree.CachingHelpers.Attributes;
 using TakeThree.CachingHelpers.Enums;
 
@@ -83,7 +85,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
         _operationType = operationType;
 
         _options = options ?? new RedisCacheCollectionOptions();
-        _options.CollectionKey ??= "TakeThree:Caching:" + typeof(T).Name + ":Collection";
+        _options.CollectionKey ??= $"TakeThree:Caching{(_options.UseCompression ? "LZ4" : string.Empty)}:{typeof(T).Name}:Collection";
     }
 
     /// <summary>
@@ -126,6 +128,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
     public async Task<Result<IEnumerable<T>>> ExecuteAsync()
     {
         // First, check to see if the cache is initialized. If it is not, we need to initialize it.
+        // ReSharper disable once InvertIf
         if (_operationType != OperationType.Replace)
         {
             var initializationResult = await InitializeCacheFromFallbackAsync();
@@ -177,17 +180,23 @@ public class RedisCacheCollectionBuilder<T> where T : class
         {
             var batch = redisCacheKeys.Skip(completedCount).Take(_options.BatchOperationThresholdLimit);
 
-            RedisValue[] cachedDataResult;
+            string[] cachedDataValues;
             try
             {
-                cachedDataResult = await _resiliencePipeline.ExecuteAsync(async _ => await _redisDb.StringGetAsync(batch.ToArray()));
+                var cachedDataResult = await GetCacheValuesAsync(batch.ToArray());
+                if (cachedDataResult.IsFailed)
+                {
+                    return Result.Fail(cachedDataResult.Errors);
+                }
+
+                cachedDataValues = cachedDataResult.Value;
             }
             catch (Exception ex)
             {
                 return Result.Fail(new Error("Error when attempting to read the records").CausedBy(ex));
             }
 
-            var addResult = Result.Try(() => items.AddRange(cachedDataResult.Select(Deserialize<T>)));
+            var addResult = Result.Try(() => items.AddRange(cachedDataValues.Select(Deserialize<T>)));
             if (addResult.IsFailed)
             {
                 return addResult;
@@ -216,7 +225,13 @@ public class RedisCacheCollectionBuilder<T> where T : class
 
         try
         {
-            await _redisDb.StringSetAsync(itemKey, Serialize(Item));
+            // Cache the value and ensure it did not run into any issues before adding to the set
+            var cacheSetResult = await SetCacheValueAsync(itemKey, Serialize(Item));
+            if (cacheSetResult.IsFailed)
+            {
+                return cacheSetResult;
+            }
+
             await _redisDb.SetAddAsync(_options.CollectionKey, idValueResult.Value);
         }
         catch (Exception ex)
@@ -242,20 +257,21 @@ public class RedisCacheCollectionBuilder<T> where T : class
 
         var itemKey = _options.CollectionKey + ":" + idValueResult.Value;
 
-        RedisValue existingData;
+        string existingData;
 
         try
         {
-            existingData = await _redisDb.StringGetAsync(itemKey);
+            var existingDataResult = await GetCacheValueAsync(itemKey);
+            if (existingDataResult.IsFailed)
+            {
+                return existingDataResult.ToResult();
+            }
+
+            existingData = existingDataResult.Value;
         }
         catch (Exception ex)
         {
             return Result.Fail(new Error("Error when attempting to update the record").CausedBy(ex));
-        }
-
-        if (existingData.IsNullOrEmpty)
-        {
-            return Result.Fail("Item not found in collection.");
         }
 
         var existingItemResult = Result.Try(() => Deserialize<T>(existingData));
@@ -290,7 +306,12 @@ public class RedisCacheCollectionBuilder<T> where T : class
 
         try
         {
-            await _redisDb.StringSetAsync(itemKey, Serialize(existingItem));
+            // Cache the value and ensure it did not run into any issues
+            var cacheSetResult = await SetCacheValueAsync(itemKey, Serialize(existingItem));
+            if (cacheSetResult.IsFailed)
+            {
+                return cacheSetResult;
+            }
         }
         catch (Exception ex)
         {
@@ -317,7 +338,7 @@ public class RedisCacheCollectionBuilder<T> where T : class
 
         try
         {
-            await _redisDb.StringSetAsync(itemKey, RedisValue.Null);
+            await _redisDb.KeyDeleteAsync(itemKey);
             await _redisDb.SetRemoveAsync(_options.CollectionKey, idValueResult.Value);
         }
         catch (Exception ex)
@@ -375,25 +396,25 @@ public class RedisCacheCollectionBuilder<T> where T : class
     }
 
     /// <summary>
-    /// Serializes the given data to a RedisValue.
+    /// Serializes the given data to a string.
     /// </summary>
     /// <typeparam name="TValue">The type of data to serialize.</typeparam>
     /// <param name="data">The data to serialize.</param>
-    /// <returns>The serialized data as a <see cref="RedisValue"/>.</returns>
-    private RedisValue Serialize<TValue>(TValue data)
+    /// <returns>The serialized data as a <see cref="string"/>.</returns>
+    private static string Serialize<TValue>(TValue data)
     {
         return JsonSerializer.Serialize(data);
     }
 
     /// <summary>
-    /// Deserializes the given RedisValue to the specified type.
+    /// Deserializes the given string to the specified type.
     /// </summary>
     /// <typeparam name="TValue">The type to deserialize to.</typeparam>
     /// <param name="cachedData">The cached data to deserialize.</param>
     /// <returns>The deserialized object of type <typeparamref name="TValue"/>.</returns>
-    private TValue Deserialize<TValue>(RedisValue cachedData)
+    private static TValue Deserialize<TValue>(string cachedData)
     {
-        return JsonSerializer.Deserialize<TValue>(cachedData!)!;
+        return JsonSerializer.Deserialize<TValue>(cachedData)!;
     }
 
     /// <summary>
@@ -448,7 +469,13 @@ public class RedisCacheCollectionBuilder<T> where T : class
 
             try
             {
-                _redisDb.StringSet(itemKey, Serialize(item));
+                // Cache the value and ensure it did not run into any issues before adding to the set
+                var cacheSetResult = await SetCacheValueAsync(itemKey, Serialize(item));
+                if (cacheSetResult.IsFailed)
+                {
+                    return cacheSetResult;
+                }
+
                 _redisDb.SetAdd(_options.CollectionKey, idValueResult.Value);
             }
             catch (Exception ex)
@@ -552,12 +579,9 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// </summary>
     /// <param name="item">The item to identify.</param>
     /// <returns>A <see cref="Result"/> containing the identifier or an error.</returns>
-    [SuppressMessage("Minor Code Smell", "S6602:\"Find\" method should be used instead of the \"FirstOrDefault\" extension", Justification = "Find is not available for the array")]
-    private Result<string?> GetItemIdentifierFromAttribute(T? item)
+    private static Result<string?> GetItemIdentifierFromAttribute(T? item)
     {
-        var identifierProperty = typeof(T)
-            .GetProperties()
-            .FirstOrDefault(prop => Attribute.IsDefined(prop, typeof(CacheRecordIdentifierAttribute)));
+        var identifierProperty = Array.Find(typeof(T).GetProperties(), prop => Attribute.IsDefined(prop, typeof(CacheRecordIdentifierAttribute)));
 
         if (identifierProperty == null)
         {
@@ -571,5 +595,114 @@ public class RedisCacheCollectionBuilder<T> where T : class
         }
 
         return identifierValue;
+    }
+
+    /// <summary>
+    /// Sets the cache value. Adds compression if enabled.
+    /// </summary>
+    /// <param name="key">The redis key</param>
+    /// <param name="value">The value to store</param>
+    /// <returns>The result of the operation</returns>
+    private async Task<Result> SetCacheValueAsync(string key, string value)
+    {
+        RedisValue cacheValue = value;
+
+        // Check to see if we have compression enabled. If we do, then we will compress the data before storage
+        if (_options.UseCompression)
+        {
+            cacheValue = CompressString(value);
+        }
+
+        try
+        {
+            await _resiliencePipeline.ExecuteAsync(async _ => await _redisDb.StringSetAsync(key, cacheValue));
+        }
+        catch (Exception ex)
+        {
+            return Result.Fail(new Error($"Error when attempting to set the cache value{(_options.UseCompression ? " with compression" : string.Empty)}").CausedBy(ex));
+        }
+
+        return Result.Ok();
+    }
+
+    /// <summary>
+    /// Gets the cache values. Decompresses if compression is enabled.
+    /// </summary>
+    /// <param name="keys">The redis keys to read from</param>
+    /// <returns>The values from the cache</returns>
+    private async Task<Result<string[]>> GetCacheValuesAsync(RedisKey[] keys)
+    {
+        RedisValue[] values;
+
+        try
+        {
+            values = await _resiliencePipeline.ExecuteAsync(async _ => await _redisDb.StringGetAsync(keys));
+        }
+        catch (Exception ex)
+        {
+            return Result.Fail(new Error("Error when attempting to read the cache values").CausedBy(ex));
+        }
+
+        // Check to see if we have compression enabled. If we do, then we will compress the data before storage
+        if (!_options.UseCompression)
+        {
+            return values
+                .Select(v => v.ToString())
+                .ToArray();
+        }
+
+        var decompressedValues = values.Select(rv => DecompressString((byte[])rv!));
+        return decompressedValues.ToArray();
+    }
+
+    /// <summary>
+    /// Gets the cache value. Decompresses if compression is enabled.
+    /// </summary>
+    /// <param name="key">The redis key to read from</param>
+    /// <returns>The value from the cache</returns>
+    private async Task<Result<string>> GetCacheValueAsync(RedisKey key)
+    {
+        RedisValue value;
+
+        try
+        {
+            value = await _resiliencePipeline.ExecuteAsync(async _ => await _redisDb.StringGetAsync(key));
+        }
+        catch (Exception ex)
+        {
+            return Result.Fail(new Error("Error when attempting to read the cache value").CausedBy(ex));
+        }
+
+        if (value.IsNullOrEmpty)
+        {
+            return Result.Fail("Value not found in cache");
+        }
+
+        // Check to see if we have compression enabled. If we do, then we will compress the data before storage
+        return !_options.UseCompression
+            ? value.ToString()
+            : DecompressString(value!);
+    }
+
+    /// <summary>
+    /// Compresses the given string using LZ4.
+    /// </summary>
+    /// <param name="value">The value to compress</param>
+    /// <returns>The compressed value</returns>
+    private static byte[] CompressString(string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        return LZ4Pickler.Pickle(bytes);
+    }
+
+    /// <summary>
+    /// Decompresses the given byte array using LZ4.
+    /// </summary>
+    /// <param name="compressedBytes">The compressed data to decompress</param>
+    /// <returns>The decompressed value</returns>
+    private static string DecompressString(byte[] compressedBytes)
+    {
+        var uncompressedBytes = LZ4Pickler.Unpickle(compressedBytes);
+        return Encoding.UTF8.GetString(uncompressedBytes);
     }
 }

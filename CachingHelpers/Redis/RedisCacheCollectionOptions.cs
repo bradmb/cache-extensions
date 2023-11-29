@@ -15,6 +15,11 @@ public class RedisCacheCollectionOptions
     public int BatchOperationThresholdLimit { get; set; } = 2500;
 
     /// <summary>
+    /// Enable compression of data when storing in the cache. If not set, defaults to true.
+    /// </summary>
+    public bool UseCompression { get; set; } = true;
+
+    /// <summary>
     /// When the data should expire. If not set, the data will not expire.
     /// </summary>
     public TimeSpan? Expiration { get; set; }
