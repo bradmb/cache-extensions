@@ -1,11 +1,13 @@
 ﻿using FluentResults;
 using K4os.Compression.LZ4;
+using K4os.Compression.LZ4.Streams;
 using Polly;
 using Polly.Retry;
 using StackExchange.Redis;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -38,7 +40,15 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// </summary>
     private readonly RedisCacheCollectionOptions _options;
 
+    /// <summary>
+    /// Our standard fallback function
+    /// </summary>
     private Func<Task<IEnumerable<T>?>>? _fallbackAsyncFunction;
+
+    /// <summary>
+    /// Our Mediator-based fallback function
+    /// </summary>
+    private Func<ValueTask<Result<IEnumerable<T>?>>>? _fallbackMediatorFunction;
 
     /// <summary>
     /// The resilience pipeline to use for the operations (Polly).
@@ -102,6 +112,17 @@ public class RedisCacheCollectionBuilder<T> where T : class
     /// <summary>
     /// Sets the fallback function.
     /// </summary>
+    /// <param name="fallbackMediatorFunction">The fallback mediator function.</param>
+    /// <returns>The Redis cache collection builder.</returns>
+    public virtual RedisCacheCollectionBuilder<T> WithFallback(Func<ValueTask<Result<IEnumerable<T>?>>> fallbackMediatorFunction)
+    {
+        _fallbackMediatorFunction = fallbackMediatorFunction;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the fallback function.
+    /// </summary>
     /// <param name="fallbackAsyncFunction">The fallback async function.</param>
     /// <returns>The Redis cache collection builder.</returns>
     public virtual RedisCacheCollectionBuilder<T> WithFallback(Func<Task<IEnumerable<T>?>> fallbackAsyncFunction)
@@ -128,7 +149,6 @@ public class RedisCacheCollectionBuilder<T> where T : class
     public async Task<Result<IEnumerable<T>>> ExecuteAsync()
     {
         // First, check to see if the cache is initialized. If it is not, we need to initialize it.
-        // ReSharper disable once InvertIf
         if (_operationType != OperationType.Replace)
         {
             var initializationResult = await InitializeCacheFromFallbackAsync();
@@ -438,15 +458,24 @@ public class RedisCacheCollectionBuilder<T> where T : class
             return Result.Fail(new Error("Error when attempting to read the record").CausedBy(ex));
         }
 
-        if (_fallbackAsyncFunction is null)
+        if (_fallbackAsyncFunction is null && _fallbackMediatorFunction is null)
         {
             return Result.Fail("No fallback function set.");
         }
 
-        IEnumerable<T>? fallbackResult;
+        IEnumerable<T>? fallbackResult = null!;
         try
         {
-            fallbackResult = await _fallbackAsyncFunction();
+            if (_fallbackAsyncFunction is not null)
+            {
+                fallbackResult = await _fallbackAsyncFunction();
+            }
+            else if (_fallbackMediatorFunction is not null)
+            {
+                var mediatorResult = await _fallbackMediatorFunction();
+                fallbackResult = mediatorResult.Value;
+            }
+
             if (fallbackResult is null)
             {
                 return Result.Fail("Fallback function returned null.");
@@ -679,9 +708,13 @@ public class RedisCacheCollectionBuilder<T> where T : class
         }
 
         // Check to see if we have compression enabled. If we do, then we will compress the data before storage
-        return !_options.UseCompression
-            ? value.ToString()
-            : DecompressString(value!);
+        if (!_options.UseCompression)
+        {
+            return value.ToString();
+        }
+
+        var decompressedValue = DecompressString(value!);
+        return decompressedValue;
     }
 
     /// <summary>
@@ -692,7 +725,9 @@ public class RedisCacheCollectionBuilder<T> where T : class
     private static byte[] CompressString(string value)
     {
         var bytes = Encoding.UTF8.GetBytes(value);
-        return LZ4Pickler.Pickle(bytes);
+        var compressed = LZ4Pickler.Pickle(bytes);
+
+        return compressed;
     }
 
     /// <summary>
@@ -703,6 +738,8 @@ public class RedisCacheCollectionBuilder<T> where T : class
     private static string DecompressString(byte[] compressedBytes)
     {
         var uncompressedBytes = LZ4Pickler.Unpickle(compressedBytes);
-        return Encoding.UTF8.GetString(uncompressedBytes);
+        var value = Encoding.UTF8.GetString(uncompressedBytes);
+
+        return value;
     }
 }

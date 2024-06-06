@@ -35,7 +35,7 @@ public class RedisCacheExtensionTests
     [Test]
     public void FromCache_InitializesBuilder()
     {
-        var builder = _mockDatabase.Object.FromCache<string>();
+        var builder = _mockDatabase.Object.FromCache();
         Assert.IsNotNull(builder);
     }
 
@@ -51,8 +51,8 @@ public class RedisCacheExtensionTests
         _mockDatabase.Setup(db => db.SetMembersAsync(It.IsAny<RedisKey>(), It.IsAny<CommandFlags>())).ReturnsAsync(new List<RedisValue> { CollectionKey }.ToArray());
 
         var verifyResult = await _mockDatabase.Object
-            .FromCache<string>()
-            .ReadFromCollection()
+            .FromCache()
+            .ReadFromCollection<string>()
             .WithCollectionKey(CollectionKey)
             .ExecuteAsync();
 
@@ -68,8 +68,8 @@ public class RedisCacheExtensionTests
     public async Task ReadFromCollection_FindsNoResults()
     {
         var verifyResult = await _mockDatabase.Object
-            .FromCache<string>()
-            .ReadFromCollection()
+            .FromCache()
+            .ReadFromCollection<string>()
             .WithCollectionKey(CollectionKey)
             .ExecuteAsync();
 
@@ -84,8 +84,8 @@ public class RedisCacheExtensionTests
     public async Task AddToCollection_UsesFallbackOnFailure()
     {
         var result = await _mockDatabase.Object
-            .FromCache<string>()
-            .AddToCollection()
+            .FromCache()
+            .AddToCollection<string>()
             .WithCollectionKey(CollectionKey)
             .WithRecordIdentifier(RecordIdentifier)
             .WithItem(Item)
